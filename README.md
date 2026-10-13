@@ -44,6 +44,20 @@ so the downloader stays easy to inspect and small by design.
   JSON file. Tap an entry to open it, long-press to remove its history entry, or use Clear to
   remove all history records.
 
+## Download the APK
+
+Download the latest installable APK from the [GitHub Releases page](https://github.com/arssshi/InstaFetchX/releases/latest).
+Open the release, download the `.apk` asset, and install it on an Android 8.0+ device. Android may
+ask you to allow installation from your browser or file manager for that one install.
+
+The current release is **v1.1.0** (`versionCode 2`). It is built with R8 and resource shrinking,
+and the published APK is signed with the Android debug key because no personal release keystore is
+stored in this repository. That makes the artifact directly installable for testing and personal
+use; use your own keystore for a branded production distribution (see [Build from source](#build-from-source)).
+
+Only install APKs from a source you trust. For reproducible verification, compare the SHA-256 value
+shown in the release notes with the file you downloaded.
+
 ## Supported links and known limits
 
 The input parser recognizes the following URL shapes. Availability still depends on what Instagram
