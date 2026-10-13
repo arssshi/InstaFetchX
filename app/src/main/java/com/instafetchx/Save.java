@@ -1,5 +1,6 @@
 package com.instafetchx;
 
+import android.annotation.SuppressLint;
 import android.content.ContentValues;
 import android.content.Context;
 import android.net.Uri;
@@ -32,6 +33,7 @@ final class Save {
         }
     }
 
+    @SuppressLint("NewApi")
     private static void saveModern(Context ctx, Media m, String session, Http.Progress progress, Listener l)
             throws Exception {
         ContentValues v = new ContentValues();
@@ -44,14 +46,19 @@ final class Save {
         Http.Sink sink = new Http.Sink() {
             private CountingStream os;
             @Override public OutputStream open() throws IOException {
-                os = new CountingStream(ctx.getContentResolver().openOutputStream(uri));
+                OutputStream raw = ctx.getContentResolver().openOutputStream(uri);
+                if (raw == null) throw new IOException("Could not open file in Downloads");
+                os = new CountingStream(raw);
                 return os;
             }
             @Override public void commit() throws IOException {
+                if (os == null) throw new IOException("Download destination was not opened");
                 v.clear();
                 v.put(MediaStore.MediaColumns.IS_PENDING, 0);
                 v.put(MediaStore.MediaColumns.SIZE, os.written);
-                ctx.getContentResolver().update(uri, v, null, null);
+                if (ctx.getContentResolver().update(uri, v, null, null) <= 0) {
+                    throw new IOException("Could not finalize file in Downloads");
+                }
                 l.onSaved(uri, m.fileName(), os.written);
             }
             @Override public void abort() {
@@ -78,16 +85,22 @@ final class Save {
             sink = new Http.Sink() {
                 private CountingStream os;
                 @Override public OutputStream open() throws IOException {
-                    os = new CountingStream(ctx.getContentResolver().openOutputStream(uri));
+                    OutputStream raw = ctx.getContentResolver().openOutputStream(uri);
+                    if (raw == null) throw new IOException("Could not open file in Downloads");
+                    os = new CountingStream(raw);
                     return os;
                 }
                 @Override public void commit() throws IOException {
+                    if (os == null) throw new IOException("Download destination was not opened");
                     v.put(MediaStore.MediaColumns.SIZE, os.written);
-                    ctx.getContentResolver().update(uri, v, null, null);
+                    if (ctx.getContentResolver().update(uri, v, null, null) <= 0) {
+                        throw new IOException("Could not finalize file in Downloads");
+                    }
                     l.onSaved(uri, m.fileName(), os.written);
                 }
                 @Override public void abort() {
                     try { ctx.getContentResolver().delete(uri, null, null); } catch (Exception ignored) { }
+                    try { f.delete(); } catch (Exception ignored) { }
                 }
             };
         } else {
@@ -98,11 +111,14 @@ final class Save {
                     return os;
                 }
                 @Override public void commit() throws IOException {
+                    if (os == null) throw new IOException("Download destination was not opened");
                     android.media.MediaScannerConnection.scanFile(
                             ctx, new String[]{f.getAbsolutePath()}, null, null);
                     l.onSaved(Uri.parse("file://" + f.getAbsolutePath()), m.fileName(), os.written);
                 }
-                @Override public void abort() { }
+                @Override public void abort() {
+                    try { f.delete(); } catch (Exception ignored) { }
+                }
             };
         }
         Http.download(m.url, session, sink, progress);

@@ -27,6 +27,7 @@ public class DownloadService extends Service {
     private static final String CHANNEL = "downloads";
     private static final int NOTIF_ID = 1;
 
+    private static final Object QUEUE_LOCK = new Object();
     private static final java.util.Queue<String> QUEUE = new ConcurrentLinkedQueue<>();
     private static volatile boolean workerRunning = false;
 
@@ -55,51 +56,88 @@ public class DownloadService extends Service {
             return START_NOT_STICKY;
         }
         if (ACTION_CANCEL.equals(intent.getAction())) {
-            cancelled = true;
-            QUEUE.clear();
+            boolean idle;
+            synchronized (QUEUE_LOCK) {
+                cancelled = true;
+                QUEUE.clear();
+                idle = !workerRunning;
+            }
+            if (idle) finish();
             return START_NOT_STICKY;
         }
         String url = intent.getStringExtra(EXTRA_URL);
-        if (url == null) {
+        if (url == null || url.trim().isEmpty()) {
             finish();
             return START_NOT_STICKY;
         }
-        cancelled = false; // a fresh intent means fresh intended work
+        boolean startWorker;
+        synchronized (QUEUE_LOCK) {
+            QUEUE.add(url);
+            startWorker = !workerRunning;
+            if (startWorker) {
+                workerRunning = true;
+                cancelled = false; // a fresh worker means fresh intended work
+            }
+        }
         try {
             startForeground(NOTIF_ID, buildNotification("Starting…", null, 0, 0, true, false));
         } catch (Exception ignored) {
             // Foreground start not allowed: keep going; the OS may kill us, downloads still attempted.
         }
-        QUEUE.add(url);
-        if (!workerRunning) {
-            workerRunning = true;
-            cancelled = false;
+        if (startWorker) {
             new Thread(this::runWorker).start();
         }
         return START_NOT_STICKY;
     }
 
     private void runWorker() {
-        while (true) {
-            String url = QUEUE.poll();
-            if (url == null) break;
-            runOne(url);
+        try {
+            while (true) {
+                String url;
+                synchronized (QUEUE_LOCK) {
+                    url = QUEUE.poll();
+                    if (url == null) {
+                        // Keep the worker flag and stopSelf transition atomic with enqueueing.
+                        // Otherwise an onStartCommand can observe a live worker, enqueue after
+                        // this poll, and have that URL stranded when the worker exits.
+                        workerRunning = false;
+                        finish();
+                        return;
+                    }
+                    // A URL received after Cancel starts a new unit of work once the canceled
+                    // transfer has unwound; URLs already in the queue were cleared by Cancel.
+                    if (cancelled) cancelled = false;
+                }
+                try {
+                    runOne(url);
+                } catch (RuntimeException e) {
+                    if (!cancelled) fail(e.getMessage() == null ? "Download failed" : e.getMessage());
+                }
+            }
+        } finally {
+            boolean stop;
+            synchronized (QUEUE_LOCK) {
+                stop = workerRunning;
+                workerRunning = false;
+            }
+            if (stop) finish();
         }
-        workerRunning = false;
-        finish();
     }
 
     private void runOne(String url) {
+        if (cancelled) return;
         String session = Prefs.session(this);
         updateNotif("Resolving link…", null, 0, 0, true, false);
         List<Media> list;
         try {
             list = Res.resolve(url, session);
         } catch (Exception e) {
+            if (cancelled) return;
             fail(e.getMessage() == null ? "Download failed" : e.getMessage());
             return;
         }
-        if (list.isEmpty()) {
+        if (cancelled) return;
+        if (list == null || list.isEmpty()) {
             fail("No media found in this link");
             return;
         }
@@ -109,6 +147,10 @@ public class DownloadService extends Service {
         for (int i = 0; i < list.size(); i++) {
             if (cancelled) break;
             final Media m = list.get(i);
+            if (m == null || m.url == null || m.url.trim().isEmpty()) {
+                failed++;
+                continue;
+            }
             final int idx = i;
             updateNotif("Downloading " + (i + 1) + " of " + list.size(), m.fileName(), 0, 0, true, true);
             final int[] counts = {saved, failed};
@@ -209,9 +251,9 @@ public class DownloadService extends Service {
                     .setAutoCancel(true)
                     .setShowWhen(false);
             Intent i;
-            try {
+            if (Build.VERSION.SDK_INT >= 29) {
                 i = Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_FILES);
-            } catch (Exception e) {
+            } else {
                 i = new Intent(this, MainActivity.class);
             }
             b.setContentIntent(PendingIntent.getActivity(this, 2, i,
@@ -235,7 +277,8 @@ public class DownloadService extends Service {
 
     private void fail(String message) {
         Bus.error(message);
-        Bus.done(0, true);        try {
+        Bus.done(0, true);
+        try {
             createChannel();
             Notification.Builder b = new Notification.Builder(this, CHANNEL)
                     .setSmallIcon(R.drawable.ic_notif)

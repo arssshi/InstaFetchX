@@ -16,6 +16,8 @@ import java.util.List;
 /** Tiny JSON-file backed download history. */
 final class History {
 
+    private static final Object LOCK = new Object();
+
     static final class Entry {
         long id;
         String name;
@@ -35,63 +37,95 @@ final class History {
     }
 
     static void add(Context c, Media m, Uri uri, long size) {
-        try {
-            JSONArray all = read(c);
-            JSONObject o = new JSONObject();
-            long id = 1;
-            for (int i = 0; i < all.length(); i++) id = Math.max(id, all.optJSONObject(i).optLong("i") + 1);
-            o.put("i", id);
-            o.put("n", m.fileName());
-            o.put("u", uri.toString());
-            o.put("s", size);
-            o.put("t", System.currentTimeMillis());
-            o.put("k", m.kind);
-            o.put("v", m.video);
-            JSONArray trimmed = new JSONArray();
-            trimmed.put(o);
-            for (int i = 0; i < all.length() && i < 59; i++) trimmed.put(all.get(i));
-            write(c, trimmed);
-        } catch (Exception ignored) { }
+        if (c == null || m == null || uri == null) return;
+        synchronized (LOCK) {
+            try {
+                JSONArray all = read(c);
+                JSONObject o = new JSONObject();
+                long id = 1;
+                for (int i = 0; i < all.length(); i++) {
+                    JSONObject existing = all.optJSONObject(i);
+                    if (existing == null) continue;
+                    long old = existing.optLong("i");
+                    if (old > 0 && old >= id) id = old == Long.MAX_VALUE ? 1 : old + 1;
+                }
+                o.put("i", id);
+                o.put("n", m.fileName());
+                o.put("u", uri.toString());
+                o.put("s", Math.max(0, size));
+                o.put("t", System.currentTimeMillis());
+                o.put("k", m.kind == null || m.kind.isEmpty() ? "Media" : m.kind);
+                o.put("v", m.video);
+                JSONArray trimmed = new JSONArray();
+                trimmed.put(o);
+                for (int i = 0; i < all.length() && trimmed.length() < 60; i++) {
+                    JSONObject existing = all.optJSONObject(i);
+                    if (isUsable(existing)) trimmed.put(existing);
+                }
+                write(c, trimmed);
+            } catch (Exception ignored) { }
+        }
     }
 
     static List<Entry> load(Context c) {
         List<Entry> out = new ArrayList<>();
-        try {
-            JSONArray all = read(c);
-            for (int i = 0; i < all.length(); i++) {
-                JSONObject o = all.optJSONObject(i);
-                if (o == null) continue;
-                Entry e = new Entry();
-                e.id = o.optLong("i");
-                e.name = o.optString("n");
-                e.uri = o.optString("u");
-                e.size = o.optLong("s");
-                e.ts = o.optLong("t");
-                e.kind = o.optString("k");
-                e.video = o.optBoolean("v");
-                out.add(e);
-            }
-        } catch (Exception ignored) { }
+        if (c == null) return out;
+        synchronized (LOCK) {
+            try {
+                JSONArray all = read(c);
+                for (int i = 0; i < all.length(); i++) {
+                    JSONObject o = all.optJSONObject(i);
+                    if (!isUsable(o)) continue;
+                    long id = o.optLong("i");
+                    if (id <= 0) continue;
+                    Entry e = new Entry();
+                    e.id = id;
+                    e.name = o.optString("n").trim();
+                    e.uri = o.optString("u").trim();
+                    e.size = Math.max(0, o.optLong("s"));
+                    e.ts = Math.max(0, o.optLong("t"));
+                    e.kind = o.optString("k");
+                    if (e.kind.isEmpty() || e.kind.equals("null")) e.kind = "Media";
+                    e.video = o.optBoolean("v");
+                    out.add(e);
+                }
+            } catch (Exception ignored) { }
+        }
         return out;
     }
 
     static void remove(Context c, long id) {
-        try {
-            JSONArray all = read(c);
-            JSONArray out = new JSONArray();
-            for (int i = 0; i < all.length(); i++) {
-                JSONObject o = all.optJSONObject(i);
-                if (o != null && o.optLong("i") == id) continue;
-                out.put(o);
-            }
-            write(c, out);
-        } catch (Exception ignored) { }
+        if (c == null) return;
+        synchronized (LOCK) {
+            try {
+                JSONArray all = read(c);
+                JSONArray out = new JSONArray();
+                for (int i = 0; i < all.length(); i++) {
+                    JSONObject o = all.optJSONObject(i);
+                    if (!isUsable(o)) continue;
+                    if (o.optLong("i") == id) continue;
+                    out.put(o);
+                }
+                write(c, out);
+            } catch (Exception ignored) { }
+        }
     }
 
     static void clear(Context c) {
-        try {
-            write(c, new JSONArray());
-        } catch (Exception ignored) { }
+        if (c == null) return;
+        synchronized (LOCK) {
+            try {
+                write(c, new JSONArray());
+            } catch (Exception ignored) { }
+        }
+    }
+
+    private static boolean isUsable(JSONObject o) {
+        if (o == null || o.optLong("i") <= 0) return false;
+        String name = o.optString("n");
+        String uri = o.optString("u");
+        return name != null && !name.trim().isEmpty() && !name.equals("null")
+                && uri != null && !uri.trim().isEmpty() && !uri.equals("null");
     }
 
     private static JSONArray read(Context c) {
@@ -101,7 +135,9 @@ final class History {
         try (BufferedReader r = new BufferedReader(new FileReader(f))) {
             char[] buf = new char[4096];
             int n;
-            while ((n = r.read(buf)) > 0) sb.append(buf, 0, n);
+            while ((n = r.read(buf)) != -1) {
+                if (n > 0) sb.append(buf, 0, n);
+            }
             return new JSONArray(sb.toString());
         } catch (Exception e) {
             return new JSONArray();
@@ -111,6 +147,7 @@ final class History {
     private static void write(Context c, JSONArray arr) {
         try {
             File tmp = new File(c.getFilesDir(), "hist.tmp");
+            if (tmp.exists()) tmp.delete();
             try (FileWriter w = new FileWriter(tmp)) {
                 w.write(arr.toString());
             }

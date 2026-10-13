@@ -50,7 +50,8 @@ final class Http {
     private static Reply get(String url, String session, boolean appId, String ua) {
         HttpURLConnection c = null;
         try {
-            c = (HttpURLConnection) new URL(url).openConnection();
+            URL target = new URL(url);
+            c = (HttpURLConnection) target.openConnection();
             c.setConnectTimeout(CONNECT_MS);
             c.setReadTimeout(READ_MS);
             c.setInstanceFollowRedirects(true);
@@ -59,11 +60,15 @@ final class Http {
             c.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
             c.setRequestProperty("Accept-Language", "en-US,en;q=0.9");
             if (appId) c.setRequestProperty("X-IG-App-ID", APP_ID);
-            if (session != null) c.setRequestProperty("Cookie", "sessionid=" + session);
+            if (session != null && isInstagramHost(target)) {
+                c.setRequestProperty("Cookie", "sessionid=" + session);
+            }
             int code = c.getResponseCode();
             InputStream is = code >= 400 ? c.getErrorStream() : c.getInputStream();
-            String body = is == null ? "" : readAll(is);
-            return new Reply(code, body);
+            if (is == null) return new Reply(code, "");
+            try (InputStream body = is) {
+                return new Reply(code, readAll(body));
+            }
         } catch (Exception e) {
             return new Reply(-1, e.getMessage() == null ? "" : e.getMessage());
         } finally {
@@ -72,10 +77,13 @@ final class Http {
     }
 
     static String readAll(InputStream is) throws IOException {
+        if (is == null) return "";
         ByteArrayOutputStream out = new ByteArrayOutputStream(48 * 1024);
         byte[] buf = new byte[16384];
         int n;
-        while ((n = is.read(buf)) > 0) out.write(buf, 0, n);
+        while ((n = is.read(buf)) != -1) {
+            if (n > 0) out.write(buf, 0, n);
+        }
         return out.toString("UTF-8");
     }
 
@@ -94,9 +102,19 @@ final class Http {
 
     /** Streaming download of a (signed, short-lived) media CDN url. */
     static void download(String url, String session, Sink sink, Progress progress) throws IOException {
+        if (sink == null) throw new IOException("Missing download sink");
         HttpURLConnection c = null;
+        InputStream is = null;
+        OutputStream os = null;
+        boolean committed = false;
         try {
-            c = (HttpURLConnection) new URL(url).openConnection();
+            if (progress != null && progress.aborted()) throw new IOException("aborted");
+            URL target = new URL(url);
+            if (!("http".equalsIgnoreCase(target.getProtocol())
+                    || "https".equalsIgnoreCase(target.getProtocol()))) {
+                throw new IOException("Unsupported media URL");
+            }
+            c = (HttpURLConnection) target.openConnection();
             c.setConnectTimeout(CONNECT_MS);
             c.setReadTimeout(READ_MS);
             c.setInstanceFollowRedirects(true);
@@ -105,29 +123,56 @@ final class Http {
             c.setRequestProperty("Accept", "*/*");
             c.setRequestProperty("Accept-Language", "en-US,en;q=0.9");
             c.setRequestProperty("Referer", "https://www.instagram.com/");
-            if (session != null && url.contains("instagram.com")) {
+            if (session != null && isInstagramHost(target)) {
                 c.setRequestProperty("Cookie", "sessionid=" + session);
             }
             int code = c.getResponseCode();
-            if (code < 200 || code >= 300) throw new IOException("HTTP " + code);
+            if (code < 200 || code >= 300) {
+                closeQuietly(c.getErrorStream());
+                throw new IOException("HTTP " + code);
+            }
+            if (progress != null && progress.aborted()) throw new IOException("aborted");
             long total = c.getContentLengthLong();
-            InputStream is = c.getInputStream();
-            OutputStream os = sink.open();
+            is = c.getInputStream();
+            os = sink.open();
+            if (os == null) throw new IOException("Could not open download destination");
             byte[] buf = new byte[16384];
             long done = 0;
             int n;
-            while ((n = is.read(buf)) > 0) {
+            while (true) {
                 if (progress != null && progress.aborted()) throw new IOException("aborted");
+                n = is.read(buf);
+                if (n == -1) break;
+                if (n == 0) continue;
                 os.write(buf, 0, n);
                 done += n;
                 if (progress != null) progress.on(done, total);
             }
+            if (progress != null && progress.aborted()) throw new IOException("aborted");
             os.flush();
             os.close();
+            os = null;
             is.close();
+            is = null;
             sink.commit();
+            committed = true;
         } finally {
+            closeQuietly(os);
+            closeQuietly(is);
+            if (!committed) {
+                try { sink.abort(); } catch (Exception ignored) { }
+            }
             if (c != null) c.disconnect();
         }
+    }
+
+    private static boolean isInstagramHost(URL url) {
+        String host = url == null ? null : url.getHost();
+        return "instagram.com".equalsIgnoreCase(host) || "www.instagram.com".equalsIgnoreCase(host);
+    }
+
+    private static void closeQuietly(java.io.Closeable c) {
+        if (c == null) return;
+        try { c.close(); } catch (Exception ignored) { }
     }
 }

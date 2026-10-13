@@ -16,12 +16,19 @@ public class ShareActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         String text = null;
-        String action = getIntent().getAction();
+        Intent incoming = getIntent();
+        String action = incoming == null ? null : incoming.getAction();
         try {
             if (Intent.ACTION_SEND.equals(action)) {
-                text = getIntent().getStringExtra(Intent.EXTRA_TEXT);
+                CharSequence shared = incoming.getCharSequenceExtra(Intent.EXTRA_TEXT);
+                text = shared == null ? null : shared.toString();
+                if (text == null || text.trim().isEmpty()) {
+                    CharSequence subject = incoming.getCharSequenceExtra(Intent.EXTRA_SUBJECT);
+                    text = subject == null ? null : subject.toString();
+                }
             } else if (Intent.ACTION_VIEW.equals(action)) {
-                text = String.valueOf(getIntent().getData());
+                android.net.Uri data = incoming.getData();
+                text = data == null ? null : data.toString();
             }
         } catch (Exception ignored) { }
         String url = Res.extractUrl(text);

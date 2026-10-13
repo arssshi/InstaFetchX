@@ -6,6 +6,9 @@ import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Locale;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -30,19 +33,20 @@ final class Res {
             Pattern.compile("<meta\\s+property=\"og:video(?::secure_url)?\"\\s+content=\"([^\"]+)\"");
     private static final Pattern OG_IMAGE =
             Pattern.compile("<meta\\s+property=\"og:image\"\\s+content=\"([^\"]+)\"");
+    private static final Pattern SHARED_URL =
+            Pattern.compile("(?i)(?<![A-Za-z0-9+.-])https?://[^\\s<>\"']+");
+    private static final Pattern SAFE_TOKEN = Pattern.compile("[A-Za-z0-9._-]{1,256}");
+    private static final Pattern SAFE_USERNAME = Pattern.compile("[A-Za-z0-9._]{1,256}");
 
     // ---- link parsing --------------------------------------------------------
 
     /** Finds the first Instagram URL anywhere in a shared text blob. */
     static String extractUrl(String text) {
         if (text == null) return null;
-        int i = text.indexOf("http");
-        while (i >= 0) {
-            int j = i;
-            while (j < text.length() && !Character.isWhitespace(text.charAt(j))) j++;
-            String cand = text.substring(i, j);
-            if (cand.contains("instagram.com/")) return stripPunctuation(cand);
-            i = text.indexOf("http", j);
+        Matcher m = SHARED_URL.matcher(text);
+        while (m.find()) {
+            String cand = stripPunctuation(m.group());
+            if (isInstagramUrl(cand)) return cand;
         }
         return null;
     }
@@ -51,10 +55,32 @@ final class Res {
         int n = u.length();
         while (n > 0) {
             char c = u.charAt(n - 1);
-            if (c == ')' || c == ']' || c == '"' || c == '\'' || c == '>' || c == ',' || c == '.' || c == ';') n--;
-            else break;
+            if (c == '"' || c == '\'' || c == '>' || c == ',' || c == '.' || c == ';'
+                    || c == ':' || c == '!' || c == '?') {
+                n--;
+            } else if (c == ')' && unmatchedClosing(u, n, '(', ')')) {
+                n--;
+            } else if (c == ']' && unmatchedClosing(u, n, '[', ']')) {
+                n--;
+            } else if (c == '}' && unmatchedClosing(u, n, '{', '}')) {
+                n--;
+            } else {
+                break;
+            }
         }
         return u.substring(0, n);
+    }
+
+    /** Whether the trailing closing delimiter is not paired in the URL prefix. */
+    private static boolean unmatchedClosing(String value, int end, char open, char close) {
+        int opens = 0;
+        int closes = 0;
+        for (int i = 0; i < end; i++) {
+            char c = value.charAt(i);
+            if (c == open) opens++;
+            else if (c == close) closes++;
+        }
+        return closes > opens;
     }
 
     static final class Target {
@@ -66,41 +92,60 @@ final class Res {
     static Target parse(String url) {
         try {
             String u = url.trim();
-            if (!u.startsWith("http")) u = "https://" + u;
-            int s = u.indexOf("://");
-            int slash = u.indexOf('/', s + 3);
-            String path = slash >= 0 ? u.substring(slash + 1) : "";
-            int end = path.indexOf('?');
-            if (end >= 0) path = path.substring(0, end);
-            int hash = path.indexOf('#');
-            if (hash >= 0) path = path.substring(0, hash);
-            String[] seg = path.split("/");
-            if (seg.length > 0 && seg[0].equals("share")) { // /share/reel/{code}
-                String[] n = new String[seg.length - 1];
-                System.arraycopy(seg, 1, n, 0, n.length);
-                seg = n;
+            if (u.isEmpty()) return null;
+            u = stripPunctuation(u);
+            if (!u.regionMatches(true, 0, "http://", 0, 7)
+                    && !u.regionMatches(true, 0, "https://", 0, 8)) {
+                u = "https://" + u;
             }
+            URI parsed = new URI(u);
+            if (!isInstagramUri(parsed)) return null;
+            String rawPath = parsed.getRawPath();
+            if (rawPath == null || !rawPath.startsWith("/")) return null;
+            String path = rawPath.substring(1);
+            String[] seg = path.split("/", -1);
+            int count = seg.length;
+            while (count > 0 && seg[count - 1].isEmpty()) count--;
+            if (count == 0) return null;
+
+            int offset = 0;
+            if ("share".equalsIgnoreCase(seg[0])) { // /share/reel/{code}
+                if (count < 3 || !"reel".equalsIgnoreCase(seg[1])) return null;
+                offset = 1;
+            }
+
             Target t = new Target();
-            if (seg.length >= 2 && (seg[0].equals("p") || seg[0].equals("reel")
-                    || seg[0].equals("reels") || seg[0].equals("tv"))) {
+            String route = offset < count ? seg[offset].toLowerCase(Locale.US) : "";
+            if (count >= offset + 2 && (route.equals("p") || route.equals("reel")
+                    || route.equals("reels") || route.equals("tv"))
+                    && safeToken(seg[offset + 1])) {
                 t.type = 0;
-                t.code = seg[1];
-            } else if (seg.length >= 3 && seg[0].equals("stories") && seg[1].equals("highlights")) {
+                t.code = seg[offset + 1];
+            } else if (offset == 0 && count >= 3 && route.equals("stories")
+                    && seg[1].equalsIgnoreCase("highlights") && safeToken(seg[2])) {
                 t.type = 3;
                 t.extra = seg[2];
-            } else if (seg.length >= 1 && seg[0].equals("s")) {
+            } else if (offset == 0 && count >= 2 && route.equals("s")) {
                 // /s/{base64 of "highlight:{id}"} — Instagram's highlight share link
-                String decoded = decodeBase64(seg.length >= 2 ? seg[1] : "");
+                String decoded = decodeBase64(seg[1]);
+                String id = null;
                 if (decoded != null && decoded.startsWith("highlight:")) {
-                    t.type = 3;
-                    t.extra = decoded.substring("highlight:".length());
+                    id = decoded.substring("highlight:".length());
                 }
-            } else if (seg.length >= 2 && seg[0].equals("stories")) {
+                if (safeToken(id)) {
+                    t.type = 3;
+                    t.extra = id;
+                }
+            } else if (offset == 0 && count >= 2 && route.equals("stories")
+                    && safeUsername(seg[1])) {
                 t.type = 2;
                 t.code = seg[1];
-                t.extra = seg.length >= 3 ? seg[2] : null;
-            } else if (seg.length == 1 && !seg[0].isEmpty()) {
-                String k = seg[0].toLowerCase();
+                if (count >= 3) {
+                    if (!safeToken(seg[2])) return null;
+                    t.extra = seg[2];
+                }
+            } else if (offset == 0 && count == 1 && safeUsername(seg[0])) {
+                String k = seg[0].toLowerCase(Locale.US);
                 if (!k.equals("p") && !k.equals("reel") && !k.equals("reels") && !k.equals("tv")
                         && !k.equals("stories") && !k.equals("highlights") && !k.equals("explore")
                         && !k.equals("accounts") && !k.equals("direct") && !k.equals("api")
@@ -116,12 +161,44 @@ final class Res {
         }
     }
 
+    private static boolean safeToken(String value) {
+        return value != null && !value.equals(".") && !value.equals("..")
+                && SAFE_TOKEN.matcher(value).matches();
+    }
+
+    private static boolean safeUsername(String value) {
+        return value != null && !value.equals(".") && !value.equals("..")
+                && SAFE_USERNAME.matcher(value).matches();
+    }
+
+    private static boolean isInstagramUrl(String value) {
+        try {
+            URI uri = new URI(value);
+            return isInstagramUri(uri) && uri.getRawPath() != null && uri.getRawPath().startsWith("/");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static boolean isInstagramUri(URI uri) {
+        if (uri == null || uri.getScheme() == null
+                || !("http".equalsIgnoreCase(uri.getScheme())
+                || "https".equalsIgnoreCase(uri.getScheme()))) return false;
+        if (uri.getUserInfo() != null) return false;
+        String host = uri.getHost();
+        if (host == null || !("instagram.com".equalsIgnoreCase(host)
+                || "www.instagram.com".equalsIgnoreCase(host))) return false;
+        int port = uri.getPort();
+        return port == -1 || ("http".equalsIgnoreCase(uri.getScheme()) && port == 80)
+                || ("https".equalsIgnoreCase(uri.getScheme()) && port == 443);
+    }
+
     private static String decodeBase64(String s) {
         try {
-            return new String(Base64.getDecoder().decode(s));
+            return new String(Base64.getDecoder().decode(s), StandardCharsets.UTF_8);
         } catch (Exception e) {
             try {
-                return new String(Base64.getUrlDecoder().decode(s));
+                return new String(Base64.getUrlDecoder().decode(s), StandardCharsets.UTF_8);
             } catch (Exception e2) {
                 return null;
             }
@@ -156,6 +233,7 @@ final class Res {
 
     /** Extracts media from a fetched post page (SSR data-sjs payloads, then og: tags). */
     static List<Media> fromHtml(String html, String fallbackCode) {
+        if (html == null || html.isEmpty()) return new ArrayList<>();
         List<Media> best = null;
         int bestScore = -1;
         List<Media> targetBest = null;
@@ -175,7 +253,7 @@ final class Res {
                     if (!(mo instanceof JSONObject)) continue;
                     JSONObject polaris = (JSONObject) mo;
                     String c = str(polaris, "code", null);
-                    boolean target = fallbackCode.equals(c);
+                    boolean target = fallbackCode != null && fallbackCode.equals(c);
                     if (!target && c != null) continue; // some other post's timeline node
                     List<Media> cand = new ArrayList<>();
                     fromMediaObject(polaris, fallbackCode, cand);
@@ -200,13 +278,13 @@ final class Res {
         Matcher v = OG_VIDEO.matcher(html);
         while (v.find()) {
             String url = unescape(v.group(1));
-            if (url.startsWith("http")) out.add(new Media(url, true, "", fallbackCode, "Reel"));
+            if (isHttpUrl(url)) out.add(new Media(url, true, "", fallbackCode, "Reel"));
         }
         if (out.isEmpty()) {
             Matcher i = OG_IMAGE.matcher(html);
             while (i.find()) {
                 String url = unescape(i.group(1));
-                if (url.startsWith("http")) out.add(new Media(url, false, "", fallbackCode, "Photo"));
+                if (isHttpUrl(url)) out.add(new Media(url, false, "", fallbackCode, "Photo"));
             }
         }
         return out;
@@ -518,5 +596,15 @@ final class Res {
                 .replace("&quot;", "\"")
                 .replace("&lt;", "<")
                 .replace("&gt;", ">");
+    }
+
+    private static boolean isHttpUrl(String value) {
+        try {
+            URI uri = new URI(value);
+            return uri.getHost() != null && ("http".equalsIgnoreCase(uri.getScheme())
+                    || "https".equalsIgnoreCase(uri.getScheme()));
+        } catch (Exception e) {
+            return false;
+        }
     }
 }

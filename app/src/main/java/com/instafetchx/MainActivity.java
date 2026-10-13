@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.res.ColorStateList;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -42,8 +43,10 @@ public class MainActivity extends Activity implements View.OnClickListener, Bus.
     private ProgressBar spin;
     private ImageButton clear;
     private ListView list;
-    private TextView empty;
+    private View empty;
+    private ImageView statusIcon;
     private ArrayAdapter<History.Entry> adapter;
+    private boolean showingError;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -59,11 +62,15 @@ public class MainActivity extends Activity implements View.OnClickListener, Bus.
         list = findViewById(R.id.list);
         empty = findViewById(R.id.empty);
         status = findViewById(R.id.status);
+        statusIcon = findViewById(R.id.statusIcon);
         ImageButton menu = findViewById(R.id.menu);
 
         btn.setOnClickListener(this);
         clear.setOnClickListener(this);
         menu.setOnClickListener(this);
+        btn.setTextColor(new ColorStateList(
+                new int[][]{new int[]{-android.R.attr.state_enabled}, new int[]{}},
+                new int[]{getColor(R.color.text_secondary), getColor(R.color.on_accent)}));
         list.setEmptyView(empty);
         list.setOnItemClickListener((AdapterView<?> p, View v, int pos, long id) -> {
             History.Entry e = adapter.getItem(pos);
@@ -74,7 +81,7 @@ public class MainActivity extends Activity implements View.OnClickListener, Bus.
             if (e != null) {
                 History.remove(this, e.id);
                 refreshHistory();
-                Toast.makeText(this, "Removed from history", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, R.string.history_removed, Toast.LENGTH_SHORT).show();
             }
             return true;
         });
@@ -83,6 +90,19 @@ public class MainActivity extends Activity implements View.OnClickListener, Bus.
             @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
             @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
                 clear.setVisibility(s.length() > 0 ? View.VISIBLE : View.GONE);
+                if (showingError) {
+                    showingError = false;
+                    row.setVisibility(View.GONE);
+                    row.setActivated(false);
+                    row.setSelected(false);
+                    statusIcon.setVisibility(View.GONE);
+                    bar.setVisibility(View.GONE);
+                }
+                if (input.isActivated()) {
+                    input.setActivated(false);
+                    hint.setText(R.string.hint_main);
+                    hint.setTextColor(getColor(R.color.text_secondary));
+                }
             }
             @Override public void afterTextChanged(Editable s) { }
         });
@@ -147,6 +167,7 @@ public class MainActivity extends Activity implements View.OnClickListener, Bus.
         ((TextView) findViewById(R.id.clearAll)).setOnClickListener(v -> {
             History.clear(MainActivity.this);
             refreshHistory();
+            Toast.makeText(MainActivity.this, R.string.history_cleared, Toast.LENGTH_SHORT).show();
         });
     }
 
@@ -165,41 +186,61 @@ public class MainActivity extends Activity implements View.OnClickListener, Bus.
     private void startDownload() {
         String url = Res.extractUrl(input.getText().toString());
         if (url == null) {
-            hint.setText("Paste a valid Instagram link first");
-            hint.setTextColor(0xFFE14B5A);
+            input.setActivated(true);
+            hint.setVisibility(View.VISIBLE);
+            hint.setText(R.string.invalid_link);
+            hint.setTextColor(getColor(R.color.err));
             return;
         }
+        input.setActivated(false);
+        showingError = false;
         hideKeyboard();
-        working("Resolving link…");
+        working(getString(R.string.resolving));
         DownloadService.start(this, url);
     }
 
     private void working(String text) {
         hint.setVisibility(View.GONE);
         row.setVisibility(View.VISIBLE);
+        row.setActivated(false);
+        row.setSelected(false);
         spin.setVisibility(View.VISIBLE);
+        statusIcon.setVisibility(View.GONE);
         bar.setVisibility(View.GONE);
         status.setText(text);
         status.setTextColor(getResources().getColor(R.color.text_secondary));
-        btn.setText("Downloading…");
+        status.setContentDescription(text);
+        btn.setText(R.string.downloading);
         btn.setEnabled(false);
     }
 
     private void idle(String text, int color) {
+        idle(text, color, false);
+    }
+
+    private void idle(String text, int color, boolean success) {
+        showingError = !success && color == getColor(R.color.err);
+        hint.setVisibility(View.GONE);
         row.setVisibility(View.VISIBLE);
+        row.setActivated(!success && color == getColor(R.color.err));
+        row.setSelected(success);
         spin.setVisibility(View.GONE);
+        statusIcon.setImageResource(success ? R.drawable.ic_check : R.drawable.ic_error);
+        statusIcon.setColorFilter(color);
+        statusIcon.setVisibility(View.VISIBLE);
         bar.setVisibility(View.GONE);
         status.setText(text);
         status.setTextColor(color);
-        btn.setText("Download");
+        status.setContentDescription(text);
+        btn.setText(R.string.download);
         btn.setEnabled(true);
     }
 
     private void showMenu(View anchor) {
         PopupMenu p = new PopupMenu(this, anchor);
-        p.getMenu().add(0, 1, 0, "Paste from clipboard");
-        p.getMenu().add(0, 2, 1, "Session ID for stories…");
-        p.getMenu().add(0, 3, 2, "About InstaFetchX");
+        p.getMenu().add(0, 1, 0, R.string.paste_clipboard);
+        p.getMenu().add(0, 2, 1, R.string.session_menu);
+        p.getMenu().add(0, 3, 2, R.string.about_menu);
         p.setOnMenuItemClickListener((MenuItem item) -> {
             int id = item.getItemId();
             if (id == 1) {
@@ -221,14 +262,14 @@ public class MainActivity extends Activity implements View.OnClickListener, Bus.
                     ? cm.getPrimaryClip().getItemAt(0).getText() : null;
             String url = Res.extractUrl(cs == null ? null : cs.toString());
             if (url == null) {
-                Toast.makeText(this, "Clipboard has no Instagram link", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, R.string.clipboard_empty, Toast.LENGTH_SHORT).show();
                 return;
             }
             input.setText(url);
             input.setSelection(url.length());
             startDownload();
         } catch (Exception e) {
-            Toast.makeText(this, "Couldn't read clipboard", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, R.string.clipboard_error, Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -282,7 +323,7 @@ public class MainActivity extends Activity implements View.OnClickListener, Bus.
 
     @Override
     public void onStart(int total) {
-        working("Downloading " + (total > 1 ? total + " files" : "1 file") + "…");
+        working(getResources().getQuantityString(R.plurals.downloading_files, total, total));
         if (total > 1) {
             bar.setVisibility(View.VISIBLE);
             bar.setMax(total);
@@ -292,7 +333,9 @@ public class MainActivity extends Activity implements View.OnClickListener, Bus.
 
     @Override
     public void onProgress(int done, int total, String name, int percent) {
-        status.setText(done + "/" + total + "  ·  " + name + "  " + percent + "%");
+        String progress = getString(R.string.download_progress, done, total, percent);
+        status.setText(progress + "  ·  " + name);
+        status.setContentDescription(progress);
         if (total > 1) bar.setProgress(done);
         else {
             spin.setVisibility(View.VISIBLE);
@@ -307,21 +350,28 @@ public class MainActivity extends Activity implements View.OnClickListener, Bus.
     @Override
     public void onDone(int count, boolean error) {
         if (count > 0) {
-            idle("Saved " + count + (count == 1 ? " file" : " files") + " ✓", getColor(R.color.ok));
+            String saved = getResources().getQuantityString(R.plurals.saved_files, count, count);
+            if (error) saved = getString(R.string.partial_save, saved);
             input.setText("");
+            idle(saved, error ? getColor(R.color.err) : getColor(R.color.ok), !error);
         } else {
-            idle(error ? "Download failed" : "Nothing saved", getColor(R.color.err));
+            if (error && showingError) {
+                btn.setText(R.string.download);
+                btn.setEnabled(true);
+                spin.setVisibility(View.GONE);
+                bar.setVisibility(View.GONE);
+            } else {
+                idle(error ? getString(R.string.download_failed) : getString(R.string.nothing_saved),
+                        getColor(R.color.err), false);
+            }
         }
     }
 
     @Override
     public void onError(String message) {
-        hint.setVisibility(View.GONE);
-        row.setVisibility(View.VISIBLE);
-        status.setText(message);
-        status.setTextColor(getColor(R.color.err));
-        btn.setText("Download");
-        btn.setEnabled(true);
+        showingError = true;
+        idle(message == null || message.trim().isEmpty() ? getString(R.string.download_failed) : message,
+                getColor(R.color.err), false);
     }
 
     // ---- history adapter --------------------------------------------------------
@@ -343,7 +393,8 @@ public class MainActivity extends Activity implements View.OnClickListener, Bus.
             TextView meta = v.findViewById(R.id.meta);
             name.setText(e.name);
             meta.setText(e.sub());
-            icon.setImageResource(R.drawable.ic_file);
+            v.setContentDescription(getString(R.string.history_item_description, e.name, e.sub()));
+            icon.setImageResource(e.video ? R.drawable.ic_video : R.drawable.ic_file);
             icon.setColorFilter(e.video ? getColor(R.color.accent) : getColor(R.color.accent2));
             return v;
         }

@@ -1,10 +1,43 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">InstaFetchX</string>
-    <string name="paste_hint">Paste an Instagram link</string>
+    <string name="tagline">Small app. Good finds.</string>
+    <string name="headline">Save your next find.</string>
+    <string name="intro">Reels, photos and more. Right on your device.</string>
+    <string name="link_label">Instagram link</string>
+    <string name="paste_hint">Paste a link here</string>
     <string name="download">Download</string>
-    <string name="hint_main">Share a link to InstaFetchX from the Instagram app — it downloads in the background. Or paste one here.</string>
-    <string name="recent">RECENT</string>
+    <string name="hint_main">Tip: share a link from Instagram straight to InstaFetchX to download in the background.</string>
+    <string name="recent">Recent downloads</string>
+    <string name="save_location">Downloads / InstaFetchX</string>
     <string name="clear">Clear</string>
-    <string name="empty_history">No downloads yet</string>
+    <string name="clear_history">Clear download history</string>
+    <string name="history_cleared">History cleared. Your saved files are still on your device.</string>
+    <string name="history_removed">Removed from history</string>
+    <string name="empty_history">Your collection starts here</string>
+    <string name="empty_history_hint">Saved photos and videos appear here.\nTap a download to open it.</string>
+    <string name="menu_label">More options</string>
+    <string name="clear_link">Clear link</string>
+    <string name="invalid_link">Paste a valid Instagram link to get started.</string>
+    <string name="resolving">Finding your media…</string>
+    <string name="downloading">Downloading…</string>
+    <plurals name="downloading_files">
+        <item quantity="one">Downloading %d file…</item>
+        <item quantity="other">Downloading %d files…</item>
+    </plurals>
+    <plurals name="saved_files">
+        <item quantity="one">%d file saved to Downloads/InstaFetchX.</item>
+        <item quantity="other">%d files saved to Downloads/InstaFetchX.</item>
+    </plurals>
+    <string name="partial_save">%1$s Some files could not be saved.</string>
+    <string name="download_failed">Download failed. Please try again.</string>
+    <string name="nothing_saved">Nothing was saved. Try another link.</string>
+    <string name="download_progress">File %1$d of %2$d · %3$d%%</string>
+    <string name="progress_label">Download progress</string>
+    <string name="history_item_description">%1$s. %2$s. Tap to open; touch and hold to remove from history.</string>
+    <string name="paste_clipboard">Paste from clipboard</string>
+    <string name="session_menu">Session ID for stories…</string>
+    <string name="about_menu">About InstaFetchX</string>
+    <string name="clipboard_empty">Clipboard has no Instagram link</string>
+    <string name="clipboard_error">Could not read clipboard</string>
 </resources>

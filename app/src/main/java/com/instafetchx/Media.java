@@ -1,5 +1,7 @@
 package com.instafetchx;
 
+import java.util.Locale;
+
 /** One downloadable piece of media. */
 final class Media {
 
@@ -25,7 +27,7 @@ final class Media {
         if (q >= 0) path = path.substring(0, q);
         int dot = path.lastIndexOf('.');
         if (dot >= 0 && dot > path.lastIndexOf('/')) {
-            String e = path.substring(dot + 1).toLowerCase();
+            String e = path.substring(dot + 1).toLowerCase(Locale.US);
             if (e.equals("mp4") || e.equals("mov") || e.equals("webm")) return "mp4";
             if (e.equals("webp") || e.equals("jpg") || e.equals("jpeg") || e.equals("png")) return e;
         }
