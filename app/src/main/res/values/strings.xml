@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">InstaFetchX</string>
+    <string name="paste_hint">Paste an Instagram link</string>
+    <string name="download">Download</string>
+    <string name="hint_main">Share a link to InstaFetchX from the Instagram app — it downloads in the background. Or paste one here.</string>
+    <string name="recent">RECENT</string>
+    <string name="clear">Clear</string>
+    <string name="empty_history">No downloads yet</string>
+</resources>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#0E0E13</color>
+    <color name="surface">#191922</color>
+    <color name="chip">#23232E</color>
+    <color name="text_primary">#F4F4F7</color>
+    <color name="text_secondary">#8F8F9B</color>
+    <color name="stroke">#2A2A36</color>
+    <color name="accent">#FF5C8A</color>
+    <color name="accent2">#B57BFF</color>
+    <color name="ok">#4CD98B</color>
+    <color name="err">#FF7185</color>
+</resources>
